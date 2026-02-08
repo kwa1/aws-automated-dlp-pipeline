@@ -1,0 +1,31 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "RestrictObjectExposure",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObjectAcl",
+        "s3:PutObjectTagging"
+      ],
+      "Resource": "arn:aws:s3:::*/*"
+    },
+    {
+      "Sid": "SecurityHubFindingsWrite",
+      "Effect": "Allow",
+      "Action": [
+        "securityhub:BatchImportFindings"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AllowMacieReadMetadata",
+      "Effect": "Allow",
+      "Action": [
+        "macie2:GetFindings",
+        "macie2:GetFindingStatistics"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
