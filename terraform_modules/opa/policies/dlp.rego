@@ -37,3 +37,16 @@ deny[msg] {
     [resource.name]
   )
 }
+#package terraform.security.tags
+
+deny[msg] {
+  resource := input.resource_changes[_]
+  resource.type == "aws_s3_bucket_policy"
+
+  not contains(resource.change.after.policy, "Sensitive")
+
+  msg := sprintf(
+    "Bucket policy %s must enforce controls based on Sensitive tag",
+    [resource.name]
+  )
+}
