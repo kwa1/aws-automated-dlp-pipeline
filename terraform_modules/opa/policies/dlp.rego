@@ -20,3 +20,20 @@ deny[msg] {
   r.change.after.job_type == "CONTINUOUS"
   msg := "Continuous Macie jobs are forbidden without explicit approval (cost risk)"
 }
+
+#package terraform.security.iam
+
+deny[msg] {
+  resource := input.resource_changes[_]
+  resource.type == "aws_iam_policy"
+
+  statement := resource.change.after.policy.Statement[_]
+  action := statement.Action[_]
+
+  startswith(action, "s3:*")
+
+  msg := sprintf(
+    "IAM policy %s contains wildcard S3 permissions",
+    [resource.name]
+  )
+}
