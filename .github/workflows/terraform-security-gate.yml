@@ -1,0 +1,16 @@
+name: Terraform + DLP Security Gate
+
+on:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform init
+      - run: terraform plan -out=tfplan
+      - run: terraform show -json tfplan > plan.json
+      - uses: open-policy-agent/setup-opa@v2
+      - run: opa eval --fail-defined --data terraform-modules/opa/policies plan.json
