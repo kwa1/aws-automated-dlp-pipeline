@@ -34,6 +34,11 @@ module "macie" {
 module "iam" {
   source = "./terraform-modules/iam"
 }
+module "cost_control" {
+  source            = "./terraform-modules/cost-control"
+  monthly_limit_usd = 300
+  alert_emails      = ["security@company.com"]
+}
 
 module "lambda_remediation" {
   source        = "./terraform-modules/lambda-remediation"
