@@ -1,10 +1,15 @@
 resource "aws_cloudwatch_event_rule" "macie" {
-  name = "macie-findings"
+  name        = "macie-findings"
+  description = "Route Macie sensitive-data classification findings to the DLP remediation Lambda"
+
   event_pattern = jsonencode({
-    source = ["aws.macie"]
-    detail-type = ["Macie Finding"]
+    source        = ["aws.macie"]
+    "detail-type" = ["Macie Finding"]
     detail = {
-      severity = [{ numeric = [">=", 7] }]
+      category = ["CLASSIFICATION"]
+      severity = {
+        description = ["High", "Medium"]
+      }
     }
   })
 }

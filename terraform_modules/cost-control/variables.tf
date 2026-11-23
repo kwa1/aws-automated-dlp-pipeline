@@ -8,3 +8,9 @@ variable "alert_emails" {
   description = "Email addresses for budget alerts"
   type        = list(string)
 }
+
+variable "anomaly_threshold_usd" {
+  description = "Absolute anomaly impact (USD) that triggers an anomaly alert"
+  type        = number
+  default     = 50
+}

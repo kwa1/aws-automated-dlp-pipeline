@@ -9,3 +9,8 @@ variable "policy_name" {
   type        = string
   default     = "macie-dlp-lambda-policy"
 }
+
+variable "bucket_arn" {
+  description = "ARN of the DLP-protected bucket the Lambda is allowed to tag"
+  type        = string
+}

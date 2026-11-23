@@ -4,9 +4,9 @@ resource "aws_cloudwatch_dashboard" "dlp_costs" {
   dashboard_body = jsonencode({
     widgets = [
       {
-        type = "text"
-        x    = 0
-        y    = 0
+        type   = "text"
+        x      = 0
+        y      = 0
         width  = 24
         height = 3
         properties = {
@@ -14,14 +14,14 @@ resource "aws_cloudwatch_dashboard" "dlp_costs" {
         }
       },
       {
-        type = "metric"
-        x    = 0
-        y    = 3
+        type   = "metric"
+        x      = 0
+        y      = 3
         width  = 12
         height = 6
         properties = {
           metrics = [
-            ["AWS/Billing", "EstimatedCharges", "ServiceName", "Amazon Macie", { "stat": "Maximum" }]
+            ["AWS/Billing", "EstimatedCharges", "ServiceName", "Amazon Macie", { "stat" : "Maximum" }]
           ]
           period = 86400
           region = "us-east-1"

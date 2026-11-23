@@ -1,9 +1,14 @@
 data "aws_iam_policy_document" "dlp" {
   statement {
-    effect = "Deny"
-    actions = ["s3:GetObject"]
+    sid       = "DenyGetSensitiveObjects"
+    effect    = "Deny"
+    actions   = ["s3:GetObject"]
     resources = ["arn:aws:s3:::${var.bucket_name}/*"]
-    principals { type = "*" identifiers = ["*"] }
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
 
     condition {
       test     = "StringEquals"
