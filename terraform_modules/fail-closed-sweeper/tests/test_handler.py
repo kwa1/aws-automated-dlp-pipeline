@@ -5,6 +5,7 @@ Run: python -m unittest discover -s terraform_modules/fail-closed-sweeper/tests
 import datetime
 import os
 import sys
+import types
 import unittest
 from unittest import mock
 
@@ -12,6 +13,21 @@ os.environ.setdefault("BUCKET_NAME", "test-bucket")
 os.environ.setdefault("MACIE_JOB_ID", "job-1")
 os.environ.setdefault("GRACE_MINUTES", "120")
 
+
+class ClientError(Exception):
+    """Stand-in for botocore.exceptions.ClientError so no AWS SDK is needed to run tests."""
+
+    def __init__(self, response, operation_name):
+        super().__init__(operation_name)
+        self.response = response
+
+
+_botocore_exceptions = types.ModuleType("botocore.exceptions")
+_botocore_exceptions.ClientError = ClientError
+_botocore = types.ModuleType("botocore")
+_botocore.exceptions = _botocore_exceptions
+sys.modules.setdefault("botocore", _botocore)
+sys.modules.setdefault("botocore.exceptions", _botocore_exceptions)
 sys.modules.setdefault("boto3", mock.MagicMock())
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -78,6 +94,19 @@ class MarkScannedTests(unittest.TestCase):
         self.tags(Scanned="true")
         self.assertFalse(handler.mark_scanned("b", "k", "v1"))
         self.s3.put_object_tagging.assert_not_called()
+
+    def test_object_made_sensitive_mid_sweep_is_left_locked(self):
+        self.tags()
+        denied = sys.modules["botocore.exceptions"].ClientError({"Error": {"Code": "AccessDenied"}}, "PutObjectTagging")
+        self.s3.put_object_tagging.side_effect = denied
+        self.assertFalse(handler.mark_scanned("b", "k", "v1"))
+
+    def test_other_aws_errors_are_raised(self):
+        self.tags()
+        boom = sys.modules["botocore.exceptions"].ClientError({"Error": {"Code": "InternalError"}}, "PutObjectTagging")
+        self.s3.put_object_tagging.side_effect = boom
+        with self.assertRaises(sys.modules["botocore.exceptions"].ClientError):
+            handler.mark_scanned("b", "k", "v1")
 
     def test_sensitive_object_is_never_touched(self):
         self.tags(Sensitive="true")

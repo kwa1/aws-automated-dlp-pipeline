@@ -17,6 +17,8 @@ import logging
 import os
 
 import boto3
+from botocore.exceptions import ClientError
+
 
 logger = logging.getLogger()
 logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))
@@ -104,10 +106,19 @@ def mark_scanned(bucket, key, version_id):
         return False
 
     tags[SCANNED_TAG] = "true"
-    s3.put_object_tagging(
-        Bucket=bucket,
-        Key=key,
-        VersionId=version_id,
-        Tagging={"TagSet": [{"Key": k, "Value": v} for k, v in tags.items()]},
-    )
+    try:
+        s3.put_object_tagging(
+            Bucket=bucket,
+            Key=key,
+            VersionId=version_id,
+            Tagging={"TagSet": [{"Key": k, "Value": v} for k, v in tags.items()]},
+        )
+    except ClientError as err:
+        # Remediation tagged the object Sensitive=true after we read its tags. The bucket
+        # policy denies this sweeper from replacing the tag set of a Sensitive object, which
+        # is exactly the outcome we want: leave the object locked and carry on.
+        if err.response.get("Error", {}).get("Code") == "AccessDenied":
+            logger.info("Object became Sensitive during sweep; left locked", extra={"key": key})
+            return False
+        raise
     return True

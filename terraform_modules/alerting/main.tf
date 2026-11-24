@@ -19,7 +19,7 @@ locals {
 
   functions = merge(
     { remediation = var.lambda_name },
-    var.sweeper_function_name == "" ? {} : { sweeper = var.sweeper_function_name },
+    var.sweeper_enabled ? { sweeper = var.sweeper_function_name } : {},
   )
 
   rule_metrics = toset(["FailedInvocations", "InvocationsFailedToBeSentToDlq"])

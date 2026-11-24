@@ -33,8 +33,14 @@ variable "rule_name" {
   type        = string
 }
 
+variable "sweeper_enabled" {
+  description = "Whether the fail-closed sweeper exists. Kept separate from its name because the name is unknown until apply, and for_each keys must be known at plan time."
+  type        = bool
+  default     = false
+}
+
 variable "sweeper_function_name" {
-  description = "Name of the fail-closed sweeper Lambda. Leave empty when fail-closed mode is off."
+  description = "Name of the fail-closed sweeper Lambda (only used when sweeper_enabled is true)"
   type        = string
   default     = ""
 }
