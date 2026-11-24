@@ -10,9 +10,17 @@ locals {
   macie_slr_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-role/macie.amazonaws.com/AWSServiceRoleForAmazonMacie"
 
   # aws:PrincipalArn holds the role ARN (not the session ARN) for assumed roles.
-  # Both lists are never empty, so the conditions below stay valid without dynamic blocks.
+  # Every list is non-empty, so the conditions below stay valid without dynamic blocks.
   read_exempt_arns = concat([local.macie_slr_arn], var.break_glass_role_arns)
-  tag_exempt_arns  = concat([var.remediation_role_arn], var.break_glass_role_arns)
+
+  # Only remediation (and break-glass) may touch tags on a Sensitive=true object. The
+  # sweeper is deliberately NOT here: if it races with remediation, S3 evaluates the
+  # existing tags at request time and denies its tag-set replacement instead of letting
+  # it wipe Sensitive=true.
+  tag_exempt_arns = concat([var.remediation_role_arn], var.break_glass_role_arns)
+
+  # Principals allowed to write the Scanned tag (fail-closed mode).
+  scanned_writer_arns = compact(concat([var.remediation_role_arn, var.sweeper_role_arn], var.break_glass_role_arns))
 }
 
 # Keep statements literal (no dynamic blocks): the OPA gate inspects this document's
@@ -138,6 +146,33 @@ data "aws_iam_policy_document" "fail_closed" {
       test     = "ArnNotLike"
       variable = "aws:PrincipalArn"
       values   = local.read_exempt_arns
+    }
+  }
+
+  # Without this an uploader could write Scanned=true themselves (x-amz-tagging on
+  # PutObject, or PutObjectTagging) and skip the scan. Remediation re-writes the whole
+  # tag set, so it must be allowed to carry an existing Scanned tag forward.
+  statement {
+    sid       = "DenyScannedTagWrites"
+    effect    = "Deny"
+    actions   = ["s3:PutObject", "s3:PutObjectTagging", "s3:PutObjectVersionTagging"]
+    resources = [local.objects_arn]
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+
+    condition {
+      test     = "Null"
+      variable = "s3:RequestObjectTag/Scanned"
+      values   = ["false"]
+    }
+
+    condition {
+      test     = "ArnNotLike"
+      variable = "aws:PrincipalArn"
+      values   = local.scanned_writer_arns
     }
   }
 }

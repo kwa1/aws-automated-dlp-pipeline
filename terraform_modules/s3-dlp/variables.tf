@@ -8,6 +8,12 @@ variable "remediation_role_arn" {
   type        = string
 }
 
+variable "sweeper_role_arn" {
+  description = "ARN of the fail-closed sweeper role, which alone may write the Scanned tag. Empty when fail_closed is false."
+  type        = string
+  default     = ""
+}
+
 variable "break_glass_role_arns" {
   description = "IAM role ARNs exempt from the read and tag-protection denies (incident response, false-positive release). Keep this list tiny and alarm on its use."
   type        = list(string)
