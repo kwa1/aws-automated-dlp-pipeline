@@ -19,7 +19,6 @@ import os
 import boto3
 from botocore.exceptions import ClientError
 
-
 logger = logging.getLogger()
 logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))
 
