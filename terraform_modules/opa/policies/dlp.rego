@@ -78,19 +78,52 @@ deny contains msg if {
 	msg := "every aws_s3_bucket requires an aws_s3_bucket_policy (DLP deny policy)"
 }
 
-# The DLP bucket policy must contain an explicit Deny keyed on the Sensitive tag.
-dlp_deny_configured if {
+# ------------------------------------------------- DLP bucket policy content
+#
+# The bucket policy is built with aws_iam_policy_document, so it is checked from the
+# plan's `configuration` section. Action lists must be literal in HCL: a statement
+# whose actions are computed cannot be verified and therefore does not count.
+
+deny_statements := [st |
 	some n in policy_docs
 	some st in n.expressions.statement
 	st.effect.constant_value == "Deny"
+]
+
+# A Deny statement conditioned on `key` that covers every action in `required`.
+condition_deny_covers(key, required) if {
+	some st in deny_statements
 	some c in as_array(st.condition)
-	c.variable.constant_value == "s3:ExistingObjectTag/Sensitive"
+	c.variable.constant_value == key
+	every a in required {
+		a in st.actions.constant_value
+	}
+}
+
+sensitive_tag := "s3:ExistingObjectTag/Sensitive"
+
+deny contains msg if {
+	count(buckets) > 0
+	not condition_deny_covers(sensitive_tag, ["s3:GetObject", "s3:GetObjectVersion"])
+	msg := "no bucket policy statement denies s3:GetObject and s3:GetObjectVersion based on the s3:ExistingObjectTag/Sensitive tag"
+}
+
+# Without this, anyone with tagging rights can flip Sensitive=false and re-open the object.
+deny contains msg if {
+	count(buckets) > 0
+	not condition_deny_covers(sensitive_tag, [
+		"s3:PutObjectTagging",
+		"s3:PutObjectVersionTagging",
+		"s3:DeleteObjectTagging",
+		"s3:DeleteObjectVersionTagging",
+	])
+	msg := "no bucket policy statement stops Sensitive objects being re-tagged or untagged (tagging actions and their version variants)"
 }
 
 deny contains msg if {
 	count(buckets) > 0
-	not dlp_deny_configured
-	msg := "no bucket policy statement denies access based on the s3:ExistingObjectTag/Sensitive tag"
+	not condition_deny_covers("aws:SecureTransport", ["s3:*"])
+	msg := "no bucket policy statement denies requests made without TLS (aws:SecureTransport = false)"
 }
 
 # ------------------------------------------------------------------ Macie
@@ -105,6 +138,23 @@ deny contains msg if {
 	some r in managed("aws_macie2_account")
 	r.change.after.status != "ENABLED"
 	msg := sprintf("%s must have status ENABLED", [r.address])
+}
+
+# A ONE_TIME job only scans what exists at apply time, so later uploads are never classified.
+deny contains msg if {
+	some r in managed("aws_macie2_classification_job")
+	r.change.after.job_type == "ONE_TIME"
+	msg := sprintf("%s is a ONE_TIME job and never scans later uploads; use job_type SCHEDULED", [r.address])
+}
+
+# Macie rates small PII counts as Low. Filtering by severity would leave those objects readable.
+deny contains msg if {
+	some r in managed("aws_cloudwatch_event_rule")
+	is_string(r.change.after.event_pattern)
+	pattern := json.unmarshal(r.change.after.event_pattern)
+	"aws.macie" in pattern.source
+	pattern.detail.severity
+	msg := sprintf("%s filters Macie findings by severity; every classification finding must reach remediation", [r.address])
 }
 
 # -------------------------------------------------------------------- IAM

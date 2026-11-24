@@ -5,21 +5,51 @@ import rego.v1
 
 # ----------------------------------------------------------------- fixtures
 
+read_statement := {
+	"effect": {"constant_value": "Deny"},
+	"actions": {"constant_value": ["s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectVersionAttributes"]},
+	"condition": [{
+		"test": {"constant_value": "StringEquals"},
+		"variable": {"constant_value": "s3:ExistingObjectTag/Sensitive"},
+		"values": {"constant_value": ["true"]},
+	}],
+}
+
+tagging_statement := {
+	"effect": {"constant_value": "Deny"},
+	"actions": {"constant_value": [
+		"s3:PutObjectTagging",
+		"s3:PutObjectVersionTagging",
+		"s3:DeleteObjectTagging",
+		"s3:DeleteObjectVersionTagging",
+	]},
+	"condition": [{
+		"test": {"constant_value": "StringEquals"},
+		"variable": {"constant_value": "s3:ExistingObjectTag/Sensitive"},
+		"values": {"constant_value": ["true"]},
+	}],
+}
+
+tls_statement := {
+	"effect": {"constant_value": "Deny"},
+	"actions": {"constant_value": ["s3:*"]},
+	"condition": [{
+		"test": {"constant_value": "Bool"},
+		"variable": {"constant_value": "aws:SecureTransport"},
+		"values": {"constant_value": ["false"]},
+	}],
+}
+
 dlp_doc := {
 	"address": "aws_iam_policy_document.dlp",
 	"mode": "data",
 	"type": "aws_iam_policy_document",
 	"name": "dlp",
-	"expressions": {"statement": [{
-		"effect": {"constant_value": "Deny"},
-		"actions": {"constant_value": ["s3:GetObject"]},
-		"condition": [{
-			"test": {"constant_value": "StringEquals"},
-			"variable": {"constant_value": "s3:ExistingObjectTag/Sensitive"},
-			"values": {"constant_value": ["true"]},
-		}],
-	}]},
+	"expressions": {"statement": [read_statement, tagging_statement, tls_statement]},
 }
+
+# JSON-patch path of the DLP document's statement list.
+stmts := "/configuration/root_module/module_calls/s3_dlp/module/resources/0/expressions/statement"
 
 good_input := {
 	"resource_changes": [
