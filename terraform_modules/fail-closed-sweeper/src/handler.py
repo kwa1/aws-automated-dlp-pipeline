@@ -68,13 +68,16 @@ def scan_cutoff(job, now):
     """Return the time before which objects are known to have been scanned, or None."""
     status = job.get("jobStatus")
     last_run = job.get("lastRunTime")
+    runs = (job.get("statistics") or {}).get("numberOfRuns", 0)
     error_code = (job.get("lastRunErrorStatus") or {}).get("code", "NONE")
 
     if status != "IDLE":
         logger.info("Macie job not idle; nothing released", extra={"job_status": status})
         return None
-    if last_run is None:
-        logger.info("Macie job has not run yet; nothing released")
+    # For a recurring job that has not run yet, Macie reports lastRunTime as the time the
+    # job was CREATED. Only numberOfRuns proves a scan actually happened.
+    if runs < 1 or last_run is None:
+        logger.info("Macie job has not completed a run yet; nothing released")
         return None
     if error_code != "NONE":
         logger.warning("Last Macie run had errors; nothing released", extra={"error_code": error_code})

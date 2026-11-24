@@ -38,8 +38,13 @@ NOW = datetime.datetime(2026, 1, 10, 12, 0, tzinfo=UTC)
 LAST_RUN = NOW - datetime.timedelta(hours=5)
 
 
-def job(status="IDLE", last_run=LAST_RUN, error="NONE"):
-    return {"jobStatus": status, "lastRunTime": last_run, "lastRunErrorStatus": {"code": error}}
+def job(status="IDLE", last_run=LAST_RUN, error="NONE", runs=3):
+    return {
+        "jobStatus": status,
+        "lastRunTime": last_run,
+        "lastRunErrorStatus": {"code": error},
+        "statistics": {"numberOfRuns": runs},
+    }
 
 
 class ScanCutoffTests(unittest.TestCase):
@@ -54,6 +59,15 @@ class ScanCutoffTests(unittest.TestCase):
 
     def test_job_that_never_ran_releases_nothing(self):
         self.assertIsNone(handler.scan_cutoff(job(last_run=None), NOW))
+
+    def test_job_with_zero_runs_releases_nothing_even_if_lastruntime_is_set(self):
+        # Macie reports the job creation time as lastRunTime before the first run.
+        self.assertIsNone(handler.scan_cutoff(job(runs=0), NOW))
+
+    def test_missing_statistics_releases_nothing(self):
+        j = job()
+        del j["statistics"]
+        self.assertIsNone(handler.scan_cutoff(j, NOW))
 
     def test_run_with_errors_releases_nothing(self):
         self.assertIsNone(handler.scan_cutoff(job(error="ERROR"), NOW))

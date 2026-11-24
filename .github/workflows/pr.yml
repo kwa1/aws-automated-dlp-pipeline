@@ -43,6 +43,19 @@ jobs:
         working-directory: root_module
         run: terraform validate
 
+      - name: Terraform init and validate (org_guardrails)
+        working-directory: org_guardrails
+        run: |
+          terraform init -backend=false -input=false -lockfile=readonly
+          terraform validate
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "3.13"
+
+      - name: Lambda unit tests
+        run: python -m unittest discover -s terraform_modules/fail-closed-sweeper/tests -v
+
       - uses: open-policy-agent/setup-opa@b2b258e089860efaadaaf71bf6e3aecb4a3eeff1 # v2.4.0
         with:
           version: ${{ env.OPA_VERSION }}
