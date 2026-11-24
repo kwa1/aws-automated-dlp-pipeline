@@ -1,0 +1,229 @@
+# Reusable Terraform pipeline: plan -> OPA gate -> (approval) -> apply the exact reviewed plan.
+#
+# Not triggered directly. Called by pr.yml (apply: false), deploy-staging.yml
+# and deploy-prod.yml (apply: true).
+#
+# Why the plan job does NOT use the GitHub environment: environment protection
+# rules (required reviewers) fire when a job *starts*. Keeping the environment
+# on the apply job only means reviewers approve after the plan is visible in the
+# job summary, and approve it exactly once.
+#
+# AWS authentication uses GitHub OIDC (no long-lived keys). The IAM roles named
+# in plan_role_arn / apply_role_arn must trust token.actions.githubusercontent.com:
+#   plan role  - read-only (state read + ReadOnlyAccess); sub =
+#                repo:<org>/<repo>:pull_request and repo:<org>/<repo>:ref:refs/heads/main
+#   apply role - write;     sub = repo:<org>/<repo>:environment:<environment>
+name: Terraform (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: GitHub environment and tfvars name (staging | production)
+        type: string
+        required: true
+      apply:
+        description: Apply the plan after the OPA gate passes (false = plan and gate only)
+        type: boolean
+        required: true
+      state_bucket:
+        description: S3 bucket holding the Terraform state for this environment
+        type: string
+        required: true
+      plan_role_arn:
+        description: IAM role assumed via OIDC for plan (read-only)
+        type: string
+        required: true
+      apply_role_arn:
+        description: IAM role assumed via OIDC for apply (required when apply is true)
+        type: string
+        required: false
+        default: ""
+      aws_region:
+        description: Region of the state bucket and of the credentials session
+        type: string
+        required: false
+        default: eu-west-1
+
+permissions:
+  contents: read
+
+env:
+  TF_VERSION: "1.17.2"
+  OPA_VERSION: "1.22.4"
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  plan:
+    name: Plan (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        shell: bash
+        working-directory: root_module
+    env:
+      ENVIRONMENT: ${{ inputs.environment }}
+      STATE_BUCKET: ${{ inputs.state_bucket }}
+      STATE_REGION: ${{ inputs.aws_region }}
+      APPLY: ${{ inputs.apply }}
+    outputs:
+      has_changes: ${{ steps.plan.outputs.has_changes }}
+    steps:
+      - name: Validate inputs
+        # Runs before checkout, so the default working directory does not exist yet.
+        working-directory: ${{ github.workspace }}
+        env:
+          PLAN_ROLE_ARN: ${{ inputs.plan_role_arn }}
+          APPLY_ROLE_ARN: ${{ inputs.apply_role_arn }}
+        run: |
+          missing=()
+          [ -n "$STATE_BUCKET" ] || missing+=("state_bucket")
+          [ -n "$PLAN_ROLE_ARN" ] || missing+=("plan_role_arn")
+          if [ "$APPLY" = "true" ] && [ -z "$APPLY_ROLE_ARN" ]; then
+            missing+=("apply_role_arn")
+          fi
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Missing required configuration: ${missing[*]}. Set the matching repository variables (see README)."
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Reject placeholder values in tfvars
+        run: |
+          if grep -n 'REPLACE-ME' "environments/${ENVIRONMENT}.tfvars"; then
+            echo "::error file=root_module/environments/${ENVIRONMENT}.tfvars::Placeholder REPLACE-ME values must be replaced before deploying."
+            exit 1
+          fi
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6
+        with:
+          role-to-assume: ${{ inputs.plan_role_arn }}
+          role-session-name: tf-plan-${{ inputs.environment }}-${{ github.run_id }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Terraform init
+        run: |
+          terraform init -input=false -lockfile=readonly \
+            -backend-config="bucket=${STATE_BUCKET}" \
+            -backend-config="key=dlp/${ENVIRONMENT}/terraform.tfstate" \
+            -backend-config="region=${STATE_REGION}"
+
+      - name: Terraform plan
+        id: plan
+        run: |
+          # No state lock for plans: the plan role stays read-only, and `terraform apply`
+          # of a saved plan takes the lock and rejects the plan if state changed since.
+          set +e
+          terraform plan -input=false -lock=false -detailed-exitcode \
+            -var-file="environments/${ENVIRONMENT}.tfvars" -out=tfplan
+          code=$?
+          set -e
+
+          # -detailed-exitcode: 0 = no changes, 1 = error, 2 = changes present
+          if [ "$code" -eq 1 ]; then
+            exit 1
+          fi
+          if [ "$code" -eq 2 ]; then
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish plan to job summary
+        run: |
+          terraform show -no-color tfplan > plan.txt
+          {
+            echo "### Terraform plan: ${ENVIRONMENT}"
+            echo '```'
+            head -c 900000 plan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: open-policy-agent/setup-opa@b2b258e089860efaadaaf71bf6e3aecb4a3eeff1 # v2.4.0
+        with:
+          version: ${{ env.OPA_VERSION }}
+
+      - name: OPA policy gate
+        run: |
+          terraform show -json tfplan > plan.json
+          # Exits non-zero when any deny rule fires, which fails the job.
+          opa eval --fail-defined --format pretty \
+            --data ../terraform_modules/opa/policies \
+            --input plan.json \
+            'data.terraform.security.deny[msg]'
+
+      - name: Upload reviewed plan
+        if: inputs.apply && steps.plan.outputs.has_changes == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: tfplan-${{ inputs.environment }}
+          # The Lambda zip is referenced by the saved plan, so it must travel with it.
+          path: |
+            root_module/tfplan
+            terraform_modules/lambda-remediation/build/lambda.zip
+          retention-days: 1
+          if-no-files-found: error
+
+  apply:
+    name: Apply (${{ inputs.environment }})
+    needs: plan
+    if: inputs.apply && needs.plan.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Required-reviewer protection configured on this GitHub environment gates the apply.
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        shell: bash
+        working-directory: root_module
+    env:
+      ENVIRONMENT: ${{ inputs.environment }}
+      STATE_BUCKET: ${{ inputs.state_bucket }}
+      STATE_REGION: ${{ inputs.aws_region }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Download reviewed plan
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: tfplan-${{ inputs.environment }}
+          path: ${{ github.workspace }}
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6
+        with:
+          role-to-assume: ${{ inputs.apply_role_arn }}
+          role-session-name: tf-apply-${{ inputs.environment }}-${{ github.run_id }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Terraform init
+        run: |
+          terraform init -input=false -lockfile=readonly \
+            -backend-config="bucket=${STATE_BUCKET}" \
+            -backend-config="key=dlp/${ENVIRONMENT}/terraform.tfstate" \
+            -backend-config="region=${STATE_REGION}"
+
+      # Applying a saved plan needs no -auto-approve and fails if state changed since planning.
+      - name: Terraform apply (saved plan)
+        run: terraform apply -input=false tfplan

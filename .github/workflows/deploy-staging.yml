@@ -2,14 +2,26 @@ name: Deploy Staging
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [main]
+
+permissions:
+  contents: read
+
+# One deployment per environment at a time; never cancel one mid-apply.
+concurrency:
+  group: terraform-staging
+  cancel-in-progress: false
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
-    environment: staging
-    steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
-      - run: terraform init
-      - run: terraform apply -auto-approve
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/terraform.yml
+    with:
+      environment: staging
+      apply: true
+      state_bucket: ${{ vars.STAGING_TF_STATE_BUCKET }}
+      plan_role_arn: ${{ vars.STAGING_PLAN_ROLE_ARN }}
+      apply_role_arn: ${{ vars.STAGING_APPLY_ROLE_ARN }}
+      aws_region: ${{ vars.TF_AWS_REGION || 'eu-west-1' }}

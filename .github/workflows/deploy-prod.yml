@@ -1,14 +1,28 @@
 name: Deploy Production
 
+# Manual promotion. Run it from `main` or from a release tag; the apply job is
+# gated by required reviewers on the `production` GitHub environment.
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-production
+  cancel-in-progress: false
+
 jobs:
   deploy:
-    runs-on: ubuntu-latest
-    environment: production
-    steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
-      - run: terraform init
-      - run: terraform apply
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/terraform.yml
+    with:
+      environment: production
+      apply: true
+      state_bucket: ${{ vars.PRODUCTION_TF_STATE_BUCKET }}
+      plan_role_arn: ${{ vars.PRODUCTION_PLAN_ROLE_ARN }}
+      apply_role_arn: ${{ vars.PRODUCTION_APPLY_ROLE_ARN }}
+      aws_region: ${{ vars.TF_AWS_REGION || 'eu-west-1' }}
