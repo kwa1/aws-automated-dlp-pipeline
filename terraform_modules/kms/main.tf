@@ -39,6 +39,25 @@ data "aws_iam_policy_document" "key" {
       values   = [local.macie_slr_arn]
     }
   }
+
+  # CloudWatch alarms publish to the CMK-encrypted alerts SNS topic.
+  statement {
+    sid       = "AllowCloudWatchAlarmsToPublishToEncryptedTopic"
+    effect    = "Allow"
+    actions   = ["kms:Decrypt", "kms:GenerateDataKey*"]
+    resources = ["*"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["cloudwatch.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [local.account_id]
+    }
+  }
 }
 
 resource "aws_kms_key" "this" {

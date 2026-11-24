@@ -15,7 +15,7 @@ variable "sweeper_role_arn" {
 }
 
 variable "break_glass_role_arns" {
-  description = "IAM role ARNs exempt from the read and tag-protection denies (incident response, false-positive release). Keep this list tiny and alarm on its use."
+  description = "IAM role ARNs exempt from the read and tag-protection denies (incident response, false-positive release). Keep this list tiny and monitor use of these roles through CloudTrail."
   type        = list(string)
   default     = []
 

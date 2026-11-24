@@ -2,7 +2,7 @@ data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
 resource "aws_iam_role" "lambda_dlp" {
-  name = var.role_name
+  name = "${var.name_prefix}-lambda-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -40,10 +40,18 @@ data "aws_iam_policy_document" "lambda_dlp" {
     actions   = ["securityhub:BatchImportFindings"]
     resources = ["arn:aws:securityhub:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:product/${data.aws_caller_identity.current.account_id}/default"]
   }
+
+  # Lambda's on-failure destination sends with the function's execution role.
+  statement {
+    sid       = "SendFailedEventsToQueue"
+    effect    = "Allow"
+    actions   = ["sqs:SendMessage"]
+    resources = ["arn:aws:sqs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:${var.failure_queue_name}"]
+  }
 }
 
 resource "aws_iam_policy" "lambda_dlp" {
-  name        = var.policy_name
+  name        = "${var.name_prefix}-lambda-policy"
   description = "Least-privilege policy for Macie-triggered DLP remediation Lambda"
   policy      = data.aws_iam_policy_document.lambda_dlp.json
 }
