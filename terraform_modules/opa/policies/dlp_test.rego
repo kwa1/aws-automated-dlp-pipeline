@@ -212,3 +212,99 @@ test_deleted_resources_ignored if {
 test_empty_plan_has_no_denials if {
 	count(security.deny) == 0 with input as {"resource_changes": [], "configuration": {"root_module": {}}}
 }
+
+# ------------------------------------------------- hardened bucket policy rules
+
+# Remove statement `i` from the DLP policy document.
+without_statement(i) := json.patch(good_input, [{"op": "remove", "path": sprintf("%s/%d", [stmts, i])}])
+
+test_missing_version_read_deny_denied if {
+	bad := json.patch(good_input, [{"op": "replace", "path": concat("", [stmts, "/0/actions/constant_value"]), "value": ["s3:GetObject"]}])
+	some msg in security.deny with input as bad
+	contains(msg, "s3:GetObjectVersion")
+}
+
+test_missing_read_deny_statement_denied if {
+	some msg in security.deny with input as without_statement(0)
+	contains(msg, "s3:GetObjectVersion")
+}
+
+test_missing_tag_tamper_deny_denied if {
+	some msg in security.deny with input as without_statement(1)
+	contains(msg, "re-tagged or untagged")
+}
+
+test_tag_deny_missing_version_variant_denied if {
+	bad := json.patch(good_input, [{"op": "replace", "path": concat("", [stmts, "/1/actions/constant_value"]), "value": ["s3:PutObjectTagging", "s3:DeleteObjectTagging"]}])
+	some msg in security.deny with input as bad
+	contains(msg, "re-tagged or untagged")
+}
+
+test_missing_tls_deny_denied if {
+	some msg in security.deny with input as without_statement(2)
+	contains(msg, "without TLS")
+}
+
+test_allow_statement_does_not_satisfy_tag_deny if {
+	bad := json.patch(good_input, [{"op": "replace", "path": concat("", [stmts, "/1/effect/constant_value"]), "value": "Allow"}])
+	some msg in security.deny with input as bad
+	contains(msg, "re-tagged or untagged")
+}
+
+test_computed_actions_do_not_satisfy_read_deny if {
+	bad := json.patch(good_input, [{"op": "remove", "path": concat("", [stmts, "/0/actions"])}])
+	some msg in security.deny with input as bad
+	contains(msg, "s3:GetObjectVersion")
+}
+
+# ----------------------------------------------------- detection rules
+
+macie_job(job_type) := {
+	"address": "module.macie.aws_macie2_classification_job.scan",
+	"mode": "managed",
+	"type": "aws_macie2_classification_job",
+	"change": {"actions": ["create"], "after": {"job_type": job_type}},
+}
+
+macie_rule(pattern) := {
+	"address": "module.eventbridge.aws_cloudwatch_event_rule.macie",
+	"mode": "managed",
+	"type": "aws_cloudwatch_event_rule",
+	"change": {"actions": ["create"], "after": {"event_pattern": json.marshal(pattern)}},
+}
+
+test_scheduled_macie_job_allowed if {
+	ok := json.patch(good_input, [{"op": "add", "path": "/resource_changes/-", "value": macie_job("SCHEDULED")}])
+	count(security.deny) == 0 with input as ok
+}
+
+test_one_time_macie_job_denied if {
+	bad := json.patch(good_input, [{"op": "add", "path": "/resource_changes/-", "value": macie_job("ONE_TIME")}])
+	some msg in security.deny with input as bad
+	contains(msg, "ONE_TIME")
+}
+
+test_macie_rule_without_severity_filter_allowed if {
+	ok := json.patch(good_input, [{"op": "add", "path": "/resource_changes/-", "value": macie_rule({
+		"source": ["aws.macie"],
+		"detail": {"category": ["CLASSIFICATION"]},
+	})}])
+	count(security.deny) == 0 with input as ok
+}
+
+test_macie_rule_with_severity_filter_denied if {
+	bad := json.patch(good_input, [{"op": "add", "path": "/resource_changes/-", "value": macie_rule({
+		"source": ["aws.macie"],
+		"detail": {"category": ["CLASSIFICATION"], "severity": {"description": ["High", "Medium"]}},
+	})}])
+	some msg in security.deny with input as bad
+	contains(msg, "filters Macie findings by severity")
+}
+
+test_unrelated_event_rule_with_severity_allowed if {
+	ok := json.patch(good_input, [{"op": "add", "path": "/resource_changes/-", "value": macie_rule({
+		"source": ["aws.guardduty"],
+		"detail": {"severity": [7]},
+	})}])
+	count(security.deny) == 0 with input as ok
+}
