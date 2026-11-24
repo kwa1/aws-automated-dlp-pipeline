@@ -20,7 +20,7 @@ resource "aws_budgets_budget" "dlp_monthly" {
     for_each = var.activate_cost_allocation_tag ? [1] : []
 
     content {
-      name   = "TagKeyValue"
+      name = "TagKeyValue"
       # Budgets syntax is user:<key>$<value>; format() avoids Terraform's "${" escape.
       values = [format("user:%s$%s", var.cost_allocation_tag_key, var.cost_allocation_tag_value)]
     }
