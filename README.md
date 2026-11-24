@@ -168,29 +168,39 @@ DLP bucket policies exist
 Insecure infrastructure never reaches AWS.
 ###########################################################################
 CI/CD & Environments
-GitHub Actions
+GitHub Actions (`.github/workflows/`)
 
-Pull Requests
+| Workflow | Trigger | What it does |
+| -------- | ------- | ------------ |
+| `pr.yml` | Pull request to `main` | `terraform fmt -check`, `validate`, OPA format/strict-check/unit tests (**Static checks**); read-only `plan` against staging, then `opa eval` of the plan JSON, failing on any `deny` (**Plan and OPA gate**) |
+| `deploy-staging.yml` | Push to `main` | plan, OPA gate, then apply of the exact saved plan |
+| `deploy-prod.yml` | Manual (`workflow_dispatch`) from `main` or a tag | plan, OPA gate, reviewer approval, then apply of the exact saved plan |
+| `terraform.yml` | Called by the three above | Shared plan/gate/apply logic (not run directly) |
 
-Terraform validate
+How it works:
 
-OPA policy evaluation
+- Plan and apply are separate jobs. The apply job downloads the plan artifact produced (and OPA-checked) by the plan job and runs `terraform apply tfplan`, so what is applied is exactly what was reviewed. Terraform rejects the plan if state changed in between.
+- Approval: the `environment:` key is only on the apply job, so required reviewers on the GitHub `production` environment approve after the plan is visible in the job summary.
+- AWS access uses GitHub OIDC. There are no long-lived AWS keys. Plan and apply use separate roles.
+- Each environment has its own state: `s3://<bucket>/dlp/<environment>/terraform.tfstate`. Backend settings are passed at `init` time (`-backend-config`), and `environments/<env>.tfvars` is passed with `-var-file`.
+- Deploys for an environment are serialised with a `concurrency` group and never cancelled mid-apply.
+- A deploy fails fast if `environments/<env>.tfvars` still contains `REPLACE-ME`.
 
-Security gate enforcement
+One-time setup:
 
-Staging Deployment
+1. Create an S3 state bucket per environment (versioning and encryption on).
+2. Create the GitHub OIDC identity provider in each AWS account, plus two IAM roles per environment:
+   - Plan role (read-only: `ReadOnlyAccess` plus read on the state bucket). Trust `sub` values: `repo:<org>/<repo>:pull_request` and `repo:<org>/<repo>:ref:refs/heads/main`.
+   - Apply role (write access to deploy the stack and the state bucket). Trust `sub`: `repo:<org>/<repo>:environment:<staging|production>`.
+3. Set these repository variables (Settings > Secrets and variables > Actions > Variables):
+   `STAGING_TF_STATE_BUCKET`, `STAGING_PLAN_ROLE_ARN`, `STAGING_APPLY_ROLE_ARN`,
+   `PRODUCTION_TF_STATE_BUCKET`, `PRODUCTION_PLAN_ROLE_ARN`, `PRODUCTION_APPLY_ROLE_ARN`,
+   and optionally `TF_AWS_REGION` (defaults to `eu-west-1`).
+4. Replace the `REPLACE-ME` values in `root_module/environments/*.tfvars`.
+5. Create the `staging` and `production` GitHub environments; add required reviewers to `production`.
+6. Branch protection on `main`: require the `Static checks` and `Plan and OPA gate` checks and a pull request review.
 
-Auto-deploy on merge to main
-
-Isolated account / environment
-
-Production Deployment
-
-Parameterized
-
-Manual approval
-
-SCP-protected
+Note: PRs from forks skip the plan job because they cannot obtain OIDC credentials.
 ################################################################
 Operational Model
 #################################################################
@@ -204,14 +214,17 @@ Auditor requests evidence	                    Instantly available
 ################################################################
 Deployment
 
-terraform init
-terraform plan
-terraform apply
+Deployments run through GitHub Actions (see above). To plan locally:
+
+cd root_module
+terraform init -backend-config="bucket=<state-bucket>" -backend-config="key=dlp/staging/terraform.tfstate" -backend-config="region=eu-west-1"
+terraform plan -var-file=environments/staging.tfvars -out=tfplan
 
 OPA validation (CI or local):
 
 terraform show -json tfplan > plan.json
-opa eval --fail-defined --data terraform-modules/opa/policies plan.json
+opa test ../terraform_modules/opa/policies
+opa eval --fail-defined --format pretty --data ../terraform_modules/opa/policies --input plan.json 'data.terraform.security.deny[msg]'
 #######################################################################
 
 Final Note
